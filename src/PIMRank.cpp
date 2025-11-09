@@ -33,9 +33,16 @@ PIMRank::PIMRank(ostream& simLog, Configuration& configuration)
       crfExit_(false),
       config(configuration),
       pimBlocks(getConfigParam(UINT, "NUM_PIM_BLOCKS"),
-                PIMBlock(PIMConfiguration::getPIMPrecision()))
+                PIMBlock(PIMConfiguration::getPIMPrecision())),
+      total_drafting_ops_(0),
+      total_preverify_ops_(0),
+      aau_invocations_(0)
 {
     currentClockCycle = 0;
+    
+    // Initialize AHASD components
+    aau = nullptr;
+    gatedScheduler = nullptr;
 }
 
 void PIMRank::attachRank(Rank* r)
@@ -63,7 +70,93 @@ int PIMRank::getRankId() const
     return this->rankId;
 }
 
-void PIMRank::update() {}
+void PIMRank::update() {
+    // Update AHASD components
+    updateAHASD();
+}
+
+// AHASD: Initialize AAU and Gated Task Scheduler
+void PIMRank::initializeAHASD(uint32_t num_ranks) {
+    if (aau == nullptr) {
+        AAUConfig aau_config;
+        aau_config.vector_width = 16;
+        aau_config.pipeline_stages = 4;
+        aau_config.throughput_gops = 2.5;
+        aau_config.latency_cycles = 8;
+        aau = new AAU(aau_config);
+    }
+    
+    if (gatedScheduler == nullptr) {
+        gatedScheduler = new GatedTaskScheduler(num_ranks);
+    }
+}
+
+// AHASD: Update per cycle
+void PIMRank::updateAHASD() {
+    if (aau != nullptr) {
+        aau->update();
+    }
+    
+    if (gatedScheduler != nullptr) {
+        gatedScheduler->update();
+        
+        // Try to schedule next task if idle
+        if (!gatedScheduler->is_busy()) {
+            gatedScheduler->schedule_next_task(currentClockCycle);
+        }
+    }
+}
+
+// AHASD: Execute AAU operation
+void PIMRank::executeAAUOperation(AAUOperation op, uint32_t num_elements) {
+    if (aau != nullptr && aau->is_available()) {
+        aau->start_operation(op, num_elements);
+        aau_invocations_++;
+    }
+}
+
+// AHASD: Start drafting task
+bool PIMRank::startDraftingTask(uint32_t batch_size, uint64_t estimated_cycles) {
+    if (gatedScheduler != nullptr && gatedScheduler->can_accept_task()) {
+        bool success = gatedScheduler->submit_task(
+            PIMTaskType::DRAFTING, batch_size, estimated_cycles);
+        if (success) {
+            total_drafting_ops_++;
+        }
+        return success;
+    }
+    return false;
+}
+
+// AHASD: Start pre-verification task
+bool PIMRank::startPreVerificationTask(uint32_t batch_size, uint64_t estimated_cycles) {
+    if (gatedScheduler != nullptr && gatedScheduler->can_accept_task()) {
+        bool success = gatedScheduler->submit_task(
+            PIMTaskType::PRE_VERIFICATION, batch_size, estimated_cycles);
+        if (success) {
+            total_preverify_ops_++;
+        }
+        return success;
+    }
+    return false;
+}
+
+// AHASD: Print statistics
+void PIMRank::printAHASDStats() const {
+    std::cout << "=== AHASD PIMRank Statistics (Ch:" << chanId 
+              << " Rank:" << rankId << ") ===" << std::endl;
+    std::cout << "Drafting Operations: " << total_drafting_ops_ << std::endl;
+    std::cout << "Pre-verification Operations: " << total_preverify_ops_ << std::endl;
+    std::cout << "AAU Invocations: " << aau_invocations_ << std::endl;
+    
+    if (aau != nullptr) {
+        aau->print_stats();
+    }
+    
+    if (gatedScheduler != nullptr) {
+        gatedScheduler->print_stats();
+    }
+}
 
 void PIMRank::controlPIM(BusPacket* packet)
 {

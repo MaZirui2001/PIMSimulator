@@ -22,6 +22,8 @@
 #include "PIMCmd.h"
 #include "Rank.h"
 #include "SimulatorObject.h"
+#include "AAU.h"
+#include "GatedTaskScheduler.h"
 
 using namespace std;
 using namespace DRAMSim;
@@ -116,6 +118,23 @@ class PIMRank : public SimulatorObject
 
     Rank* rank;
     vector<PIMBlock> pimBlocks;
+    
+    // AHASD extensions
+    AAU* aau;  // Attention Algorithm Unit
+    GatedTaskScheduler* gatedScheduler;  // Task scheduler
+    
+    // Statistics for AHASD
+    uint64_t total_drafting_ops_;
+    uint64_t total_preverify_ops_;
+    uint64_t aau_invocations_;
+    
+    // AAU and scheduler control
+    void initializeAHASD(uint32_t num_ranks = 16);
+    void updateAHASD();
+    void executeAAUOperation(AAUOperation op, uint32_t num_elements);
+    bool startDraftingTask(uint32_t batch_size, uint64_t estimated_cycles);
+    bool startPreVerificationTask(uint32_t batch_size, uint64_t estimated_cycles);
+    void printAHASDStats() const;
 };
 }  // namespace DRAMSim
 #endif
